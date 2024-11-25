@@ -1,0 +1,145 @@
+#include <WiFi.h>
+#include <Wire.h>
+#include <Adafruit_SSD1306.h>
+#include <ArduinoJson.h>
+#include <HTTPClient.h>
+
+// Wi-Fi credentials
+const char* ssid = "yourSSID";
+const char* password = "yourPASSWORD";
+
+// NASA DONKI API
+const char* apiEndpoint = "https://api.nasa.gov/DONKI/FLR?startDate=2024-11-22&endDate=2024-12-01&api_key=DEMO_KEY";
+
+// OLED display setup
+#define SCREEN_WIDTH 128
+#define SCREEN_HEIGHT 64
+#define OLED_RESET -1
+Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
+
+// Button pin definitions
+#define BUTTON_FORWARD 19
+#define BUTTON_BACKWARD 18
+#define BUTTON_POWER 9
+
+// Variables for button control
+int currentIndex = 0;
+bool displayOn = true;
+
+// Data storage
+struct SolarFlare {
+    String startTime;
+};
+SolarFlare solarFlares[10]; // Store up to 10 flares
+int flareCount = 0;
+
+// Wi-Fi connection
+void connectToWiFi() {
+    Serial.print("Connecting to WiFi...");
+    WiFi.begin(ssid, password);
+    while (WiFi.status() != WL_CONNECTED) {
+        delay(500);
+        Serial.print(".");
+    }
+    Serial.println("\nWiFi connected!");
+}
+
+// Fetch solar flare data
+void fetchSolarFlareData() {
+    HTTPClient http;
+    http.begin(apiEndpoint);
+
+    int httpCode = http.GET();
+    if (httpCode == HTTP_CODE_OK) {
+        String payload = http.getString();
+        Serial.println("Data fetched!");
+        Serial.println(payload);
+
+        // Parse JSON
+        DynamicJsonDocument doc(4096);
+        DeserializationError error = deserializeJson(doc, payload);
+        if (error) {
+            Serial.print("JSON parsing failed: ");
+            Serial.println(error.c_str());
+            return;
+        }
+
+        // Store solar flare data
+        JsonArray flares = doc.as<JsonArray>();
+        flareCount = 0; // Reset flare count
+        for (JsonObject flare : flares) {
+            if (flareCount >= 10) break; // Prevent overflow
+            solarFlares[flareCount].startTime = flare["beginTime"].as<String>();
+            flareCount++;
+        }
+    } else {
+        Serial.printf("HTTP GET failed: %s\n", http.errorToString(httpCode).c_str());
+    }
+    http.end();
+}
+
+// Display solar flare data
+void showFlareData() {
+    display.clearDisplay();
+    if (flareCount == 0) {
+        display.setCursor(0, 10);
+        display.print("No data available");
+    } else {
+        display.setCursor(0, 10);
+        display.printf("Flare %d/%d", currentIndex + 1, flareCount);
+        display.setCursor(0, 30);
+        display.print("Time:");
+        display.setCursor(0, 45);
+        display.print(solarFlares[currentIndex].startTime);
+    }
+    display.display();
+}
+
+// Button handling
+void handleButtons() {
+    if (digitalRead(BUTTON_POWER) == LOW) {
+        displayOn = !displayOn;
+        delay(300); // Debounce delay
+        if (!displayOn) {
+            display.clearDisplay();
+            display.display();
+        }
+    }
+    if (!displayOn) return;
+
+    if (digitalRead(BUTTON_FORWARD) == LOW) {
+        currentIndex = (currentIndex + 1) % flareCount;
+        showFlareData();
+        delay(300); // Debounce delay
+    }
+
+    if (digitalRead(BUTTON_BACKWARD) == LOW) {
+        currentIndex = (currentIndex - 1 + flareCount) % flareCount;
+        showFlareData();
+        delay(300); // Debounce delay
+    }
+}
+
+void setup() {
+    Serial.begin(115200);
+    pinMode(BUTTON_FORWARD, INPUT_PULLUP);
+    pinMode(BUTTON_BACKWARD, INPUT_PULLUP);
+    pinMode(BUTTON_POWER, INPUT_PULLUP);
+    Wire.begin(7, 6);
+    if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
+        Serial.println("SSD1306 allocation failed");
+        while (true);
+    }
+    
+    display.clearDisplay();
+    display.setTextSize(1);
+    display.setTextColor(SSD1306_WHITE);
+
+    connectToWiFi();
+    fetchSolarFlareData();
+    showFlareData();
+}
+
+void loop() {
+    handleButtons();
+}
